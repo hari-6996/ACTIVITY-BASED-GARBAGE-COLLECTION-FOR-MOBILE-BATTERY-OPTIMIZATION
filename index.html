@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Volt-Guard v4.1 | 20% Auto-Trigger OS</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background: #020617; color: #f8fafc; font-family: 'Inter', sans-serif; overflow: hidden; }
+        .glass { background: rgba(30, 41, 59, 0.4); backdrop-filter: blur(16px); border: 1px solid rgba(255,255,255,0.1); }
+        .app-icon { transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); cursor: pointer; position: relative; }
+        .is-running { border: 2px solid #22d3ee; box-shadow: 0 0 15px rgba(34, 211, 238, 0.4); background: rgba(34, 211, 238, 0.1); }
+        .is-swapped { filter: grayscale(1); opacity: 0.5; border: 1px dashed #64748b; }
+        .loading-spin { position: absolute; inset: 0; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; border-radius: 1.5rem; color: #22d3ee; font-size: 10px; font-weight: bold; }
+        .battery-charging { animation: pulse-green 2s infinite; }
+        @keyframes pulse-green { 0%, 100% { box-shadow: 0 0 5px #22c55e; } 50% { box-shadow: 0 0 20px #22c55e; } }
+    </style>
+</head>
+<body class="h-screen flex items-center justify-center p-4">
+
+    <div id="shutdown" class="hidden fixed inset-0 bg-black flex flex-col items-center justify-center z-50 text-center">
+        <h1 class="text-6xl mb-4">🪫</h1>
+        <p class="text-red-500 font-bold text-2xl uppercase tracking-widest">Power Exhausted</p>
+        <button onclick="charge()" class="mt-8 bg-green-600 px-10 py-4 rounded-full font-bold">RECHARGE NOW</button>
+    </div>
+
+    <div class="w-full max-w-7xl grid grid-cols-1 lg:grid-cols-12 gap-6 h-[88vh]">
+        
+        <div class="lg:col-span-4 glass rounded-[3rem] p-8 border-4 border-slate-800 flex flex-col shadow-2xl">
+            <div class="flex justify-between items-center mb-6">
+                <span id="bat-val" class="text-xs font-bold text-green-400">100%</span>
+                <div id="bat-box" class="w-10 h-5 border border-slate-500 rounded-sm p-0.5">
+                    <div id="bat-fill" class="h-full bg-green-500 transition-all duration-1000" style="width: 100%"></div>
+                </div>
+            </div>
+
+            <div class="flex-grow">
+                <div id="drawer" class="grid grid-cols-3 gap-4"></div>
+            </div>
+
+            <div class="mt-auto space-y-2">
+                <div class="grid grid-cols-3 gap-1 mb-2">
+                    <button id="btn-perf" onclick="setMode('PERFORMANCE')" class="text-[8px] bg-slate-700 p-2 rounded-lg font-bold uppercase">Perf.</button>
+                    <button id="btn-norm" onclick="setMode('NORMAL')" class="text-[8px] bg-cyan-600 p-2 rounded-lg font-bold uppercase">Normal</button>
+                    <button id="btn-save" onclick="setMode('SAVER')" class="text-[8px] bg-slate-700 p-2 rounded-lg font-bold uppercase">Saver</button>
+                </div>
+                <button id="auto-btn" onclick="toggleAuto()" class="w-full bg-indigo-600 py-3 rounded-2xl font-bold text-[10px] uppercase">Auto-Switch: OFF</button>
+                <button onclick="charge()" class="w-full bg-green-900/20 text-green-400 py-2 rounded-2xl font-bold text-[10px] border border-green-500/20 uppercase tracking-widest">Recharge</button>
+            </div>
+        </div>
+
+        <div class="lg:col-span-8 glass p-6 rounded-3xl flex flex-col overflow-hidden border border-slate-800 shadow-inner">
+            <h3 class="text-xs font-bold text-slate-500 uppercase mb-4 flex justify-between">
+                <span>Process Control Block (PCB)</span>
+                <span id="mode-badge" class="text-cyan-400 font-black italic">MODE: NORMAL</span>
+            </h3>
+            <div class="flex-grow overflow-y-auto pr-2">
+                <table class="w-full text-left text-[11px]">
+                    <thead class="text-slate-500 border-b border-slate-800 sticky top-0 bg-[#020617] z-10">
+                        <tr>
+                            <th class="py-2">PID</th>
+                            <th class="py-2">PROCESS</th>
+                            <th class="py-2">MEMORY TIER</th>
+                            <th class="py-2">BURST (s)</th>
+                            <th class="py-2">WAIT (s)</th>
+                            <th class="py-2">ACTIVITY %</th>
+                        </tr>
+                    </thead>
+                    <tbody id="pcb-rows"></tbody>
+                </table>
+            </div>
+            <div id="logs" class="h-20 mt-4 border-t border-slate-800 pt-2 font-mono text-[10px] text-slate-400 overflow-y-auto">
+                <div>> OS v4.1 Booted. Monitoring for 20% battery threshold...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let battery = 100, sysTime = 0, isAuto = false, isCharging = false;
+        let currentMode = "NORMAL"; 
+        
+        let apps = [
+            { id: '3001', name: "Social", icon: "📸", uptime: 0, wait: 0, status: "Ready", loc: "RAM" },
+            { id: '3002', name: "Stream", icon: "🎬", uptime: 0, wait: 0, status: "Ready", loc: "RAM" },
+            { id: '3003', name: "Chats", icon: "💬", uptime: 0, wait: 0, status: "Ready", loc: "RAM" },
+            { id: '3004', name: "Maps", icon: "📍", uptime: 0, wait: 0, status: "Ready", loc: "RAM" },
+            { id: '3005', name: "Music", icon: "🎵", uptime: 0, wait: 0, status: "Ready", loc: "RAM" },
+            { id: '3006', name: "Notes", icon: "📝", uptime: 0, wait: 0, status: "Ready", loc: "RAM" }
+        ];
+
+        function setMode(mode) {
+            currentMode = mode;
+            log(`[POLICY] Changed to ${mode} mode.`);
+            
+            document.getElementById('btn-perf').className = mode === 'PERFORMANCE' ? "text-[8px] bg-orange-600 p-2 rounded-lg font-bold uppercase" : "text-[8px] bg-slate-700 p-2 rounded-lg font-bold uppercase";
+            document.getElementById('btn-norm').className = mode === 'NORMAL' ? "text-[8px] bg-cyan-600 p-2 rounded-lg font-bold uppercase" : "text-[8px] bg-slate-700 p-2 rounded-lg font-bold uppercase";
+            document.getElementById('btn-save').className = mode === 'SAVER' ? "text-[8px] bg-green-600 p-2 rounded-lg font-bold uppercase" : "text-[8px] bg-slate-700 p-2 rounded-lg font-bold uppercase";
+            
+            updateBadge();
+            render();
+        }
+
+        function updateBadge() {
+            const badge = document.getElementById('mode-badge');
+            if (currentMode === "NORMAL" && battery < 20) {
+                badge.innerText = "MODE: NORMAL (CRITICAL SAVER ACTIVE)";
+                badge.className = "text-red-500 font-black italic";
+            } else {
+                badge.innerText = `MODE: ${currentMode}`;
+                badge.className = currentMode === 'PERFORMANCE' ? "text-orange-500 font-black italic" : "text-cyan-400 font-black italic";
+            }
+        }
+
+        function clickApp(id) {
+            let app = apps.find(a => a.id === id);
+            if(app.loc === "Disk (Swap)") {
+                app.loading = true;
+                log(`[PAGE FAULT] Swapping ${app.name} back to RAM.`);
+                render();
+                setTimeout(() => {
+                    app.loc = "RAM"; app.loading = false;
+                    app.wait = 0; activateApp(app);
+                }, 1500);
+            } else {
+                activateApp(app);
+            }
+        }
+
+        function activateApp(app) {
+            apps.forEach(a => { if(a.status === "Running") a.status = "Ready"; });
+            app.status = "Running";
+            app.wait = 0;
+            if(!isAuto) coreStep(3);
+            render();
+        }
+
+        function charge() {
+            isCharging = true; battery = Math.min(100, battery + 30);
+            document.getElementById('shutdown').classList.add('hidden');
+            document.getElementById('bat-box').classList.add('battery-charging');
+            setTimeout(() => {
+                isCharging = false;
+                document.getElementById('bat-box').classList.remove('battery-charging');
+                render();
+            }, 1000);
+        }
+
+        function toggleAuto() {
+            if(battery <= 0) return;
+            isAuto = !isAuto;
+            document.getElementById('auto-btn').innerText = isAuto ? "STOP KERNEL" : "START AUTO-PILOT";
+            if(isAuto) tick();
+        }
+
+        function tick() {
+            if(!isAuto || battery <= 0) { checkPower(); return; }
+            coreStep(3);
+            if(Math.random() > 0.5) {
+                let ramPool = apps.filter(a => a.loc === "RAM");
+                if(ramPool.length > 0) activateApp(ramPool[Math.floor(Math.random() * ramPool.length)]);
+            }
+            setTimeout(tick, 3000);
+        }
+
+        function coreStep(step) {
+            sysTime += step;
+            if(!isCharging) battery = Math.max(0, battery - 4);
+
+            apps.forEach(a => {
+                if(a.status === "Running") a.uptime += step;
+                else a.wait += step;
+            });
+
+            let shouldGC = false;
+            if(currentMode === "SAVER") shouldGC = true;
+            
+            if(currentMode === "NORMAL" && battery < 20) {
+                shouldGC = true;
+                log(`[ALERT] Battery < 20%. Triggering Auto-GC in Normal Mode.`);
+            }
+
+            if(shouldGC && !isCharging && currentMode !== "PERFORMANCE") {
+                apps.forEach(a => {
+                    let ratio = a.uptime / sysTime;
+                    if(ratio < 0.20 && a.loc === "RAM" && a.status !== "Running" && a.wait > 15) {
+                        a.loc = "Disk (Swap)"; a.status = "Ready";
+                        log(`[GC] Swapped ${a.name} (Usage < 20%)`);
+                    }
+                });
+            }
+            updateBadge();
+            render();
+            checkPower();
+        }
+
+        function checkPower() {
+            if(battery <= 0) {
+                battery = 0; isAuto = false;
+                document.getElementById('shutdown').classList.remove('hidden');
+                render();
+            }
+        }
+
+        function render() {
+            const drw = document.getElementById('drawer'); drw.innerHTML = '';
+            apps.forEach(a => {
+                const div = document.createElement('div');
+                div.className = `app-icon glass p-4 rounded-3xl flex flex-col items-center gap-1 ${a.status === 'Running' ? 'is-running' : a.loc.includes('Disk') ? 'is-swapped' : ''}`;
+                div.onclick = () => clickApp(a.id);
+                div.innerHTML = `<span class="text-3xl">${a.icon}</span><span class="text-[9px] font-bold uppercase">${a.name}</span>
+                    ${a.loading ? '<div class="loading-spin">LOAD</div>' : ''}`;
+                drw.appendChild(div);
+            });
+
+            const pcb = document.getElementById('pcb-rows'); pcb.innerHTML = '';
+            apps.forEach(a => {
+                let ratio = Math.round((a.uptime / sysTime) * 100) || 0;
+                const tr = document.createElement('tr');
+                tr.className = "border-b border-slate-800/50 " + (a.status === 'Running' ? 'bg-cyan-500/10' : '');
+                tr.innerHTML = `<td class="py-3 text-slate-500 font-mono">${a.id}</td><td class="font-bold">${a.name}</td>
+                    <td><span class="px-2 py-0.5 rounded ${a.loc === 'RAM' ? 'bg-cyan-500/20 text-cyan-400' : 'bg-slate-700 text-slate-500'}">${a.loc}</span></td>
+                    <td>${a.uptime}s</td><td>${a.wait}s</td><td class="${ratio < 20 ? 'text-red-400' : 'text-green-400'} font-bold">${ratio}%</td>`;
+                pcb.appendChild(tr);
+            });
+            document.getElementById('bat-val').innerText = battery + "%";
+            document.getElementById('bat-fill').style.width = battery + "%";
+            document.getElementById('bat-fill').className = `h-full transition-all duration-1000 ${battery < 20 ? 'bg-red-500' : 'bg-green-500'}`;
+        }
+
+        function log(m) {
+            const l = document.getElementById('logs');
+            l.innerHTML = `<div>> ${m}</div>` + l.innerHTML;
+        }
+
+        render();
+    </script>
+</body>
+</html>
